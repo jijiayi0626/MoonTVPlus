@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { MusicLoadingIndicator, type Playlist } from '../MusicClient';
+import MusicLoadingIndicator from '@/components/music/MusicLoadingIndicator';
 import { musicSources, normalizeSource } from '@/lib/music/shared';
+import type { Playlist } from '@/lib/music/types';
 
 export default function MusicRankingsPage() {
   const router = useRouter();

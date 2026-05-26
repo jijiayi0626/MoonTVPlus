@@ -1,6 +1,6 @@
 'use client';
 
-import type { Song } from '@/app/music/MusicClient';
+import type { Song } from '@/lib/music/types';
 
 export function playMusicSong(song: Song, index = -1) {
   window.dispatchEvent(new CustomEvent('music:play-song', { detail: { song, index } }));

@@ -1,8 +1,8 @@
 'use client';
 
 import { addMusicSongToPlaylist, playMusicLater, playMusicSong } from '@/lib/music/actions';
-import type { Song } from './MusicClient';
 import { SourcePill } from '@/lib/music/shared';
+import type { Song } from '@/lib/music/types';
 
 export default function SongList({ songs }: { songs: Song[] }) {
   return (

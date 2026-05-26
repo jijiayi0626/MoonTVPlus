@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { playMusicList, playMusicSong } from '@/lib/music/actions';
-import { MusicLoadingIndicator } from '../MusicClient';
+import MusicLoadingIndicator from '@/components/music/MusicLoadingIndicator';
+import { getApiErrorMessage } from '@/lib/music/errors';
 import { mapSong, SourcePill } from '@/lib/music/shared';
 
 export default function MusicMyPlaylistsPage() {
@@ -13,14 +14,6 @@ export default function MusicMyPlaylistsPage() {
   const [loadingUserPlaylistSongs, setLoadingUserPlaylistSongs] = useState(false);
   const [deletingPlaylistId, setDeletingPlaylistId] = useState<string | null>(null);
   const [removingSongId, setRemovingSongId] = useState<string | null>(null);
-
-  const getApiErrorMessage = (error: unknown, fallback: string) => {
-    if (typeof error === 'string') return error;
-    if (error && typeof error === 'object' && 'message' in error && typeof (error as { message?: unknown }).message === 'string') {
-      return (error as { message: string }).message;
-    }
-    return fallback;
-  };
 
   const loadUserPlaylists = useCallback(() => {
     setLoadingUserPlaylists(true);

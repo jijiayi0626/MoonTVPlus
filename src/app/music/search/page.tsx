@@ -3,9 +3,10 @@
 import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { playMusicList } from '@/lib/music/actions';
-import { MusicLoadingIndicator, type Song } from '../MusicClient';
-import SongList from '../SongList';
+import MusicLoadingIndicator from '@/components/music/MusicLoadingIndicator';
+import SongList from '@/components/music/SongList';
 import { mapSong, musicSources, normalizeSource } from '@/lib/music/shared';
+import type { Song } from '@/lib/music/types';
 
 export default function MusicSearchPage() {
   const router = useRouter();

@@ -1,12 +1,15 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 'use client';
 
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import AddToPlaylistModal from '@/components/AddToPlaylistModal';
 import Toast, { ToastProps } from '@/components/Toast';
 import LyricsPiPWindow from '@/components/LyricsPiPWindow';
+import MusicSidebarDrawer from '@/components/music/MusicSidebarDrawer';
+import { getSourceDisplayLabel, normalizeSource, SourcePill } from '@/lib/music/shared';
+import type { MusicQuality, MusicSource, Song } from '@/lib/music/types';
 
 const SPECTRUM_BIN_COUNT = 96;
 const SPECTRUM_IDLE_LEVEL = 0.02;
@@ -14,30 +17,6 @@ const SPECTRUM_EDGE_TRIM = 8;
 const SPECTRUM_REFERENCE_VOLUME = 10;
 const SPECTRUM_MIN_VOLUME = 5;
 const SPECTRUM_MAX_REFERENCE_VOLUME = 15;
-
-function getApiErrorMessage(error: unknown, fallback: string): string {
-  if (typeof error === 'string') return error;
-  if (error && typeof error === 'object' && 'message' in error) {
-    const message = (error as { message?: unknown }).message;
-    if (typeof message === 'string' && message.trim()) return message;
-  }
-  return fallback;
-}
-
-export type MusicSource = 'wy' | 'tx' | 'kw' | 'kg' | 'mg';
-export type MusicQuality = '128k' | '320k' | 'flac' | 'flac24bit';
-
-export interface Song {
-  id: string;
-  name: string;
-  artist: string;
-  album?: string;
-  pic?: string;
-  platform: MusicSource;
-  duration?: number;
-  durationText?: string;
-  songmid?: string;
-}
 
 interface PlayRecord {
   platform: MusicSource;
@@ -51,14 +30,6 @@ interface LyricLine {
   time: number;
   text: string;
   translation?: string;
-}
-
-export interface Playlist {
-  id: string;
-  name: string;
-  pic?: string;
-  source?: MusicSource;
-  updateFrequency?: string;
 }
 
 interface DbRecord {
@@ -75,38 +46,6 @@ interface DbRecord {
   cover?: string;
   durationText?: string;
   songmid?: string;
-}
-
-export function MusicLoadingIndicator({
-  text,
-  size = 'md',
-  className = '',
-}: {
-  text?: string;
-  size?: 'sm' | 'md';
-  className?: string;
-}) {
-  const iconSize = size === 'sm' ? 'w-4 h-4' : 'w-5 h-5';
-  const textSize = size === 'sm' ? 'text-xs' : 'text-sm';
-
-  return (
-    <div className={`flex items-center justify-center gap-3 text-zinc-400 ${className}`}>
-      <div className="flex items-end gap-1.5">
-        {[0, 1, 2].map((index) => (
-          <svg
-            key={index}
-            className={`${iconSize} text-green-400`}
-            fill="currentColor"
-            viewBox="0 0 24 24"
-            style={{ animation: `music-note-bounce 0.9s ease-in-out ${index * 0.14}s infinite` }}
-          >
-            <path d="M12 3v11.55A3.98 3.98 0 0010 14c-2.21 0-4 1.34-4 3s1.79 3 4 3 4-1.34 4-3V8h4V3h-6z" />
-          </svg>
-        ))}
-      </div>
-      {text ? <span className={`${textSize} font-medium tracking-wide`}>{text}</span> : null}
-    </div>
-  );
 }
 
 function AudioSpectrumCanvas({
@@ -274,17 +213,7 @@ declare global {
 export default function MusicClient({ children: _children }: { children?: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
   const [currentSource, setCurrentSource] = useState<MusicSource>('wy');
-  const [playlists, setPlaylists] = useState<Playlist[]>([]);
-  const [songs, setSongs] = useState<Song[]>([]);
-  const [currentView, setCurrentView] = useState<'playlists' | 'songs' | 'myPlaylists' | 'search'>('playlists');
-  const [currentPlaylistTitle, setCurrentPlaylistTitle] = useState('');
-  const [searchKeyword, setSearchKeyword] = useState('');
-  const [activeSearchKeyword, setActiveSearchKeyword] = useState('');
-  const [searchPage, setSearchPage] = useState(1);
-  const [searchHasMore, setSearchHasMore] = useState(false);
-  const [loadingMoreSearch, setLoadingMoreSearch] = useState(false);
   const [currentSong, setCurrentSong] = useState<Song | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isBuffering, setIsBuffering] = useState(false);
@@ -295,7 +224,6 @@ export default function MusicClient({ children: _children }: { children?: React.
   const [playMode, setPlayMode] = useState<'loop' | 'single' | 'random'>('loop');
   const [currentSongIndex, setCurrentSongIndex] = useState(-1);
   const [showPlayer, setShowPlayer] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [showLyrics, setShowLyrics] = useState(false);
   const [mobileLyricsView, setMobileLyricsView] = useState<'lyrics' | 'vinyl'>('lyrics');
   const [musicProxyEnabled, setMusicProxyEnabled] = useState(() => {
@@ -310,23 +238,12 @@ export default function MusicClient({ children: _children }: { children?: React.
   const [showPlaylist, setShowPlaylist] = useState(false);
   const [playlistIndex, setPlaylistIndex] = useState(-1); // 当前在播放列表中的索引
   const [showQualityMenu, setShowQualityMenu] = useState(false); // 音质选择菜单
-  const [showSourceMenu, setShowSourceMenu] = useState(false); // 移动端音源菜单
   const [showSidebarDrawer, setShowSidebarDrawer] = useState(false); // 左侧抽屉菜单
   const [showVolumeSlider, setShowVolumeSlider] = useState(false); // 音量滑块显示状态
   const [pendingSongToPlay, setPendingSongToPlay] = useState<{ platform: string; id: string } | null>(null); // 待播放的歌曲信息
   const [resolvingCount, setResolvingCount] = useState(0); // 当前解析中的歌曲数量
   const [showAddToPlaylistModal, setShowAddToPlaylistModal] = useState(false); // 添加到歌单弹窗
   const [songToAddToPlaylist, setSongToAddToPlaylist] = useState<Song | null>(null); // 要添加到歌单的歌曲
-
-  // 我的歌单相关状态
-  const [userPlaylists, setUserPlaylists] = useState<any[]>([]);
-  const [selectedUserPlaylist, setSelectedUserPlaylist] = useState<any | null>(null);
-  const [userPlaylistSongs, setUserPlaylistSongs] = useState<any[]>([]);
-  const [loadingUserPlaylists, setLoadingUserPlaylists] = useState(false);
-  const [loadingUserPlaylistSongs, setLoadingUserPlaylistSongs] = useState(false);
-  const [loadingPlayAll, setLoadingPlayAll] = useState(false); // 播放全部加载状态
-  const [loadingCurrentPlayAll, setLoadingCurrentPlayAll] = useState(false); // 当前排行榜/详情页播放全部加载状态
-  const [deletingPlaylistId, setDeletingPlaylistId] = useState<string | null>(null); // 正在删除的歌单ID
 
   useEffect(() => {
     if (typeof window !== 'undefined' && !(window as any).RUNTIME_CONFIG?.MUSIC_ENABLED) {
@@ -364,7 +281,6 @@ export default function MusicClient({ children: _children }: { children?: React.
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const lyricsContainerRef = useRef<HTMLDivElement>(null);
-  const searchLoadMoreRef = useRef<HTMLDivElement>(null);
   const lastSaveTimeRef = useRef<number>(0);
   const restoredTimeRef = useRef<number>(0);
   const songStartTimeRef = useRef<number>(0); // 歌曲开始播放的时间戳
@@ -379,66 +295,6 @@ export default function MusicClient({ children: _children }: { children?: React.
   const qualitySwitchRequestRef = useRef(0);
   const currentSongRef = useRef<Song | null>(null);
   const currentSourceRef = useRef(currentSource);
-
-  const mapSong = (song: any): Song => ({
-    id: song.songId || song.id,
-    name: song.name,
-    artist: song.artist,
-    album: song.album,
-    pic: song.cover || song.pic,
-    platform: normalizeSource(song.source || song.platform),
-    duration: song.durationSec || song.duration,
-    durationText: song.durationText || song.interval,
-    songmid: song.songmid,
-  });
-
-  const normalizeSource = (source: string | undefined): MusicSource => {
-    switch (source) {
-      case 'netease': return 'wy';
-      case 'qq': return 'tx';
-      case 'kuwo': return 'kw';
-      case 'wy':
-      case 'tx':
-      case 'kw':
-      case 'kg':
-      case 'mg':
-        return source;
-      default:
-        return 'wy';
-    }
-  };
-
-  const musicSources: Array<{ key: MusicSource; label: string }> = [
-    { key: 'wy', label: '网易云' },
-    { key: 'tx', label: 'QQ' },
-    { key: 'kw', label: '酷我' },
-    { key: 'kg', label: '酷狗' },
-    { key: 'mg', label: '咪咕' },
-  ];
-
-  const getSourceDisplayLabel = (source?: MusicSource | string, compact = true) => {
-    switch (normalizeSource(source)) {
-      case 'wy': return compact ? '网易' : '网易云';
-      case 'tx': return compact ? 'QQ' : 'QQ音乐';
-      case 'kw': return '酷我';
-      case 'kg': return '酷狗';
-      case 'mg': return '咪咕';
-    }
-  };
-
-  const SourcePill = ({
-    source,
-    className = '',
-  }: {
-    source?: MusicSource | string;
-    className?: string;
-  }) => (
-    <span
-      className={`inline-flex shrink-0 items-center rounded-lg border border-red-500/50 bg-red-500/20 px-2 py-0.5 text-[10px] font-medium leading-none text-red-400 ${className}`}
-    >
-      {getSourceDisplayLabel(source)}
-    </span>
-  );
 
   const buildStreamUrl = (song: Song, source: MusicSource, songQuality: MusicQuality) => {
     const params = new URLSearchParams({
@@ -548,10 +404,7 @@ export default function MusicClient({ children: _children }: { children?: React.
     const playState = {
       currentSong,
       currentSongIndex,
-      songs,
-      currentPlaylistTitle,
       currentSource,
-      currentView,
       quality,
       playMode,
       volume,
@@ -645,10 +498,7 @@ export default function MusicClient({ children: _children }: { children?: React.
         const playState = savedPlayState ? JSON.parse(savedPlayState) : {};
 
         // 恢复配置状态（不包括歌曲）
-        setSongs(playState.songs || []);
-        setCurrentPlaylistTitle(playState.currentPlaylistTitle || '');
         setCurrentSource(normalizeSource(playState.currentSource));
-        setCurrentView(playState.currentView || 'playlists');
         setQuality(playState.quality || '320k');
         setPlayMode(playState.playMode || 'loop');
         setVolume(playState.volume || 100);
@@ -763,7 +613,7 @@ export default function MusicClient({ children: _children }: { children?: React.
     if (currentSong) {
       savePlayState();
     }
-  }, [currentSong, currentSongIndex, songs, currentPlaylistTitle, currentSource, currentView, quality, playMode, volume, currentSongUrl, lyrics, playRecords, playlistIndex]);
+  }, [currentSong, currentSongIndex, currentSource, quality, playMode, volume, currentSongUrl, lyrics, playRecords, playlistIndex]);
 
   useEffect(() => {
     currentSongRef.current = currentSong;
@@ -792,518 +642,7 @@ export default function MusicClient({ children: _children }: { children?: React.
     }
   }, [volume]);
 
-  // 加载排行榜列表
-  const loadPlaylists = async (source: string) => {
-    setLoading(true);
-    try {
-      const boardsResponse = await fetch(`/api/music/v2/discovery/boards?source=${source}`);
-      const boardsData = await boardsResponse.json();
-
-      if (boardsResponse.ok && boardsData.success) {
-        setPlaylists((boardsData.data?.list || []).map((item: any) => ({
-          id: item.id,
-          name: item.name,
-          source: normalizeSource(item.source || boardsData.data?.source || source),
-          updateFrequency: item.updateFrequency || item.description || '',
-        })));
-      } else {
-        console.error('加载排行榜失败:', boardsData);
-        setPlaylists([]);
-      }
-    } catch (error) {
-      console.error('加载排行榜失败:', error);
-      setPlaylists([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // 加载歌单详情
-  const loadPlaylist = async (playlistId: string, playlistName: string, playlistSource?: MusicSource, navigate = true) => {
-    const source = playlistSource || currentSource;
-    if (navigate) {
-      router.push(`/music/rankings/${source}/${encodeURIComponent(playlistId)}?name=${encodeURIComponent(playlistName)}`);
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const response = await fetch(
-        `/api/music/v2/discovery/board-songs?source=${source}&boardId=${encodeURIComponent(playlistId)}`
-      );
-      const data = await response.json();
-      setSongs((data.data?.list || []).map(mapSong));
-      setCurrentPlaylistTitle(playlistName);
-      setActiveSearchKeyword('');
-      setSearchPage(1);
-      setSearchHasMore(false);
-      setCurrentView('songs');
-    } catch (error) {
-      console.error('加载歌单失败:', error);
-      setSongs([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // 当前排行榜歌单：播放全部
-  const handlePlayAllCurrentSongs = async () => {
-    setLoadingCurrentPlayAll(true);
-
-    try {
-      if (songs.length === 0) {
-        setToast({
-          message: '当前歌单为空',
-          type: 'error',
-          onClose: () => setToast(null),
-        });
-        return;
-      }
-
-      await fetch('/api/music/v2/history', { method: 'DELETE' });
-
-      const baseTime = Date.now();
-      const recordsToAdd = songs.map((song, i) => ({
-        song: {
-          songId: song.id,
-          source: song.platform,
-          songmid: song.songmid,
-          name: song.name,
-          artist: song.artist,
-          album: song.album,
-          cover: song.pic,
-          durationSec: song.duration || 0,
-          durationText: song.durationText,
-        },
-        playProgressSec: 0,
-        lastPlayedAt: baseTime + i,
-        playCount: 1,
-        lastQuality: quality,
-        createdAt: baseTime + i,
-      }));
-
-      await fetch('/api/music/v2/history', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ records: recordsToAdd }),
-      });
-
-      const newRecords: PlayRecord[] = songs.map((song, i) => ({
-        platform: song.platform,
-        id: song.id,
-        playTime: 0,
-        duration: song.duration || 0,
-        timestamp: baseTime + i,
-      }));
-
-      setPlayRecords(newRecords);
-      setPlaylist(songs);
-      setPlaylistIndex(0);
-      await playSong(songs[0], 0);
-
-      setToast({
-        message: `已开始播放 ${currentPlaylistTitle || '当前歌单'}`,
-        type: 'success',
-        onClose: () => setToast(null),
-      });
-    } catch (error) {
-      console.error('排行榜播放全部失败:', error);
-      setToast({
-        message: '播放全部失败',
-        type: 'error',
-        onClose: () => setToast(null),
-      });
-    } finally {
-      setLoadingCurrentPlayAll(false);
-    }
-  };
-
-  // 搜索歌曲
-  const searchSongs = async (keywordArg?: string, navigate = true) => {
-    const keyword = (keywordArg ?? searchKeyword).trim();
-    if (!keyword) return;
-
-    if (navigate) {
-      router.push(`/music/search?source=${currentSource}&q=${encodeURIComponent(keyword)}`);
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const response = await fetch(
-        `/api/music/v2/search?source=${currentSource}&q=${encodeURIComponent(keyword)}&page=1&limit=20`
-      );
-      const data = await response.json();
-      setSongs((data.data?.list || []).map(mapSong));
-      setActiveSearchKeyword(keyword);
-      setSearchKeyword(keyword);
-      setSearchPage(1);
-      setSearchHasMore(Boolean(data.data?.hasMore));
-      setCurrentPlaylistTitle(`搜索: ${keyword}`);
-      setCurrentView('search');
-    } catch (error) {
-      console.error('搜索失败:', error);
-      setSongs([]);
-      setActiveSearchKeyword('');
-      setSearchPage(1);
-      setSearchHasMore(false);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const loadMoreSearchSongs = async () => {
-    const keyword = activeSearchKeyword.trim();
-    if (!keyword || loadingMoreSearch || !searchHasMore) return;
-
-    const nextPage = searchPage + 1;
-    setLoadingMoreSearch(true);
-    try {
-      const response = await fetch(
-        `/api/music/v2/search?source=${currentSource}&q=${encodeURIComponent(keyword)}&page=${nextPage}&limit=20`
-      );
-      const data = await response.json();
-
-      if (response.ok && data.success) {
-        const nextSongs = (data.data?.list || []).map(mapSong);
-        setSongs((prev) => [...prev, ...nextSongs]);
-        setSearchPage(nextPage);
-        setSearchHasMore(Boolean(data.data?.hasMore));
-      } else {
-        setToast({
-          message: data.error?.message || '加载更多失败',
-          type: 'error',
-          onClose: () => setToast(null),
-        });
-      }
-    } catch (error) {
-      console.error('加载更多搜索结果失败:', error);
-      setToast({
-        message: '加载更多失败',
-        type: 'error',
-        onClose: () => setToast(null),
-      });
-    } finally {
-      setLoadingMoreSearch(false);
-    }
-  };
-
-  // 打开添加到歌单弹窗
-  const handleAddToPlaylist = (song: Song, e: React.MouseEvent) => {
-    e.stopPropagation(); // 阻止事件冒泡，避免触发播放
-    setSongToAddToPlaylist(song);
-    setShowAddToPlaylistModal(true);
-  };
-
-  // 稍后播放：追加到当前播放列表末尾，不立即播放
-  const handlePlayLater = (song: Song, e: React.MouseEvent) => {
-    e.stopPropagation();
-
-    if (!currentSong && playlist.length === 0 && playRecords.length === 0) {
-      playSong(song, -1);
-      return;
-    }
-
-    const platform = song.platform || currentSource;
-    const exists = playlist.some((item) => item.id === song.id && item.platform === platform);
-
-    if (exists) {
-      setToast({
-        message: '歌曲已在播放列表中',
-        type: 'info',
-        onClose: () => setToast(null),
-      });
-      return;
-    }
-
-    const record: PlayRecord = {
-      platform,
-      id: song.id,
-      playTime: 0,
-      duration: song.duration || 0,
-      timestamp: Date.now(),
-    };
-
-    setPlayRecords((prev) => [...prev, record]);
-    setPlaylist((prev) => [...prev, { ...song, platform }]);
-    saveHistoryRecordSafely(record, { ...song, platform }, 0, song.duration || 0, 0);
-    setToast({
-      message: '已加入稍后播放',
-      type: 'success',
-      onClose: () => setToast(null),
-    });
-  };
-
-  // 加载用户歌单列表
-  const loadUserPlaylists = async () => {
-    try {
-      setLoadingUserPlaylists(true);
-      const response = await fetch('/api/music/v2/playlists');
-      if (response.ok) {
-        const data = await response.json();
-        setUserPlaylists(data.data?.playlists || []);
-      }
-    } catch (error) {
-      console.error('加载歌单失败:', error);
-    } finally {
-      setLoadingUserPlaylists(false);
-    }
-  };
-
-  // 加载歌单中的歌曲
-  const loadUserPlaylistSongs = async (playlistId: string) => {
-    try {
-      setLoadingUserPlaylistSongs(true);
-      const response = await fetch(`/api/music/v2/playlists/${playlistId}/songs`);
-      if (response.ok) {
-        const data = await response.json();
-        setUserPlaylistSongs((data.data?.songs || []).map((song: any) => ({
-          ...song,
-          id: song.songId,
-          platform: song.source,
-          pic: song.cover,
-          duration: song.durationSec,
-        })));
-      }
-    } catch (error) {
-      console.error('加载歌单歌曲失败:', error);
-    } finally {
-      setLoadingUserPlaylistSongs(false);
-    }
-  };
-
-  // 选择歌单
-  const handleSelectUserPlaylist = (playlist: any) => {
-    setSelectedUserPlaylist(playlist);
-    loadUserPlaylistSongs(playlist.id);
-  };
-
-  // 播放全部歌单歌曲
-  const handlePlayAllPlaylist = async () => {
-    if (!selectedUserPlaylist || userPlaylistSongs.length === 0) {
-      setToast({
-        message: '歌单为空',
-        type: 'error',
-        onClose: () => setToast(null),
-      });
-      return;
-    }
-
-    setLoadingPlayAll(true);
-    try {
-      // 1. 清空所有播放历史
-      await fetch('/api/music/v2/history', { method: 'DELETE' });
-
-      // 2. 清空本地状态
-      setPlayRecords([]);
-      setPlaylist([]);
-
-      // 3. 批量添加歌单中的所有歌曲到播放历史
-      const baseTime = Date.now();
-      const recordsToAdd = userPlaylistSongs.map((song, i) => ({
-        song: {
-          songId: song.id,
-          source: song.platform,
-          songmid: song.songmid,
-          name: song.name,
-          artist: song.artist,
-          album: song.album,
-          cover: song.pic,
-          durationSec: song.duration || 0,
-          durationText: song.durationText,
-        },
-        playProgressSec: 0,
-        lastPlayedAt: baseTime + i,
-        playCount: 1,
-        lastQuality: quality,
-        createdAt: baseTime + i,
-      }));
-
-      // 一次性批量添加所有歌曲
-      const response = await fetch('/api/music/v2/history', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          records: recordsToAdd,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error('批量添加歌曲失败');
-      }
-
-      // 4. 立即更新本地状态
-      const newRecords: PlayRecord[] = userPlaylistSongs.map((song, i) => ({
-        platform: song.platform,
-        id: song.id,
-        playTime: 0,
-        duration: song.duration || 0,
-        timestamp: baseTime + i,
-      }));
-
-      const newPlaylist: Song[] = userPlaylistSongs.map((song) => ({
-        id: song.id,
-        name: song.name,
-        artist: song.artist,
-        album: song.album,
-        pic: song.pic,
-        platform: song.platform,
-        duration: song.duration,
-        durationText: song.durationText,
-        songmid: song.songmid,
-      }));
-
-      setPlayRecords(newRecords);
-      setPlaylist(newPlaylist);
-
-      // 5. 直接播放第一首歌
-      if (userPlaylistSongs.length > 0) {
-        setPlaylistIndex(0);
-        await playSong(userPlaylistSongs[0], 0);
-      }
-
-      setToast({
-        message: `已将 ${userPlaylistSongs.length} 首歌曲添加到播放列表`,
-        type: 'success',
-        onClose: () => setToast(null),
-      });
-    } catch (error) {
-      console.error('播放全部失败:', error);
-      setToast({
-        message: '播放全部失败',
-        type: 'error',
-        onClose: () => setToast(null),
-      });
-    } finally {
-      setLoadingPlayAll(false);
-    }
-  };
-
-  // 删除歌单
-  const handleDeleteUserPlaylist = async (playlistId: string) => {
-    setConfirmModal({
-      isOpen: true,
-      title: '确认删除',
-      message: '确定要删除这个歌单吗？',
-      onConfirm: async () => {
-        // 先关闭确认框
-        setConfirmModal({
-          isOpen: false,
-          title: '',
-          message: '',
-          onConfirm: () => {},
-          onCancel: () => {},
-        });
-
-        // 然后执行删除
-        setDeletingPlaylistId(playlistId);
-        try {
-          const response = await fetch(`/api/music/v2/playlists/${playlistId}`, { method: 'DELETE' });
-
-          if (response.ok) {
-            setToast({
-              message: '删除成功',
-              type: 'success',
-              onClose: () => setToast(null),
-            });
-            if (selectedUserPlaylist?.id === playlistId) {
-              setSelectedUserPlaylist(null);
-              setUserPlaylistSongs([]);
-            }
-            loadUserPlaylists();
-          } else {
-            const data = await response.json();
-            setToast({
-              message: getApiErrorMessage(data.error, '删除失败'),
-              type: 'error',
-              onClose: () => setToast(null),
-            });
-          }
-        } catch (error) {
-          console.error('删除歌单失败:', error);
-          setToast({
-            message: '删除歌单失败',
-            type: 'error',
-            onClose: () => setToast(null),
-          });
-        } finally {
-          setDeletingPlaylistId(null);
-        }
-      },
-      onCancel: () => {
-        setConfirmModal({
-          isOpen: false,
-          title: '',
-          message: '',
-          onConfirm: () => {},
-          onCancel: () => {},
-        });
-      },
-    });
-  };
-
-  // 从歌单中移除歌曲
-  const handleRemoveSongFromUserPlaylist = async (song: any) => {
-    if (!selectedUserPlaylist) return;
-
-    setConfirmModal({
-      isOpen: true,
-      title: '确认移除',
-      message: `确定要从歌单中移除 "${song.name}" 吗？`,
-      onConfirm: async () => {
-        try {
-          const response = await fetch(
-            `/api/music/v2/playlists/${selectedUserPlaylist.id}/songs?songId=${encodeURIComponent(song.id)}`,
-            { method: 'DELETE' }
-          );
-
-          if (response.ok) {
-            setToast({
-              message: '移除成功',
-              type: 'success',
-              onClose: () => setToast(null),
-            });
-            loadUserPlaylistSongs(selectedUserPlaylist.id);
-          } else {
-            const data = await response.json();
-            setToast({
-              message: getApiErrorMessage(data.error, '移除失败'),
-              type: 'error',
-              onClose: () => setToast(null),
-            });
-          }
-        } catch (error) {
-          console.error('移除歌曲失败:', error);
-          setToast({
-            message: '移除歌曲失败',
-            type: 'error',
-            onClose: () => setToast(null),
-          });
-        }
-        setConfirmModal({
-          isOpen: false,
-          title: '',
-          message: '',
-          onConfirm: () => {},
-          onCancel: () => {},
-        });
-      },
-      onCancel: () => {
-        setConfirmModal({
-          isOpen: false,
-          title: '',
-          message: '',
-          onConfirm: () => {},
-          onCancel: () => {},
-        });
-      },
-    });
-  };
-
-
   const handlePlayAllCurrentSongsWith = async (targetSongs: Song[], title: string) => {
-    setLoadingCurrentPlayAll(true);
-
     try {
       if (targetSongs.length === 0) {
         setToast({ message: '当前列表为空', type: 'error', onClose: () => setToast(null) });
@@ -1350,8 +689,6 @@ export default function MusicClient({ children: _children }: { children?: React.
     } catch (error) {
       console.error('播放全部失败:', error);
       setToast({ message: '播放全部失败', type: 'error', onClose: () => setToast(null) });
-    } finally {
-      setLoadingCurrentPlayAll(false);
     }
   };
 
@@ -1588,27 +925,19 @@ export default function MusicClient({ children: _children }: { children?: React.
 
   // 上一曲
   const playPrev = () => {
-    // 优先从播放列表切换
     if (playlist.length > 0) {
-      // 如果已经是第一首，循环到最后一首
       const prevIndex = playlistIndex > 0 ? playlistIndex - 1 : playlist.length - 1;
       setPlaylistIndex(prevIndex);
       playSong(playlist[prevIndex], -1);
-    } else if (currentSongIndex > 0) {
-      playSong(songs[currentSongIndex - 1], currentSongIndex - 1);
     }
   };
 
   // 下一曲
   const playNext = () => {
-    // 优先从播放列表切换
     if (playlist.length > 0) {
-      // 如果已经是最后一首，循环到第一首
       const nextIndex = playlistIndex < playlist.length - 1 ? playlistIndex + 1 : 0;
       setPlaylistIndex(nextIndex);
       playSong(playlist[nextIndex], -1);
-    } else if (currentSongIndex < songs.length - 1) {
-      playSong(songs[currentSongIndex + 1], currentSongIndex + 1);
     }
   };
 
@@ -1821,15 +1150,6 @@ export default function MusicClient({ children: _children }: { children?: React.
     setPlayMode(modes[nextIndex]);
   };
 
-  // 返回
-  const goBack = () => {
-    if (currentView === 'songs' || currentView === 'search' || currentView === 'myPlaylists') {
-      router.push('/music/rankings');
-    } else {
-      router.back();
-    }
-  };
-
   // 下载歌曲
   const downloadSong = () => {
     if (!currentSongUrl || !currentSong) return;
@@ -1842,64 +1162,6 @@ export default function MusicClient({ children: _children }: { children?: React.
     link.click();
     document.body.removeChild(link);
   };
-
-  // 切换平台
-  const switchSource = (source: MusicSource) => {
-    setCurrentSource(source);
-    setSongs([]);
-    setSearchKeyword('');
-    setActiveSearchKeyword('');
-    setSearchPage(1);
-    setSearchHasMore(false);
-    if (pathname?.startsWith('/music/search')) {
-      router.push(`/music/search?source=${source}`);
-    } else {
-      router.push('/music/rankings');
-    }
-  };
-
-
-  // 路由同步：/music 下多页面切换时保留本组件和播放器状态
-  useEffect(() => {
-    if (!pathname) return;
-
-    if (pathname === '/music' || pathname === '/music/rankings') {
-      setCurrentView('playlists');
-      setSongs([]);
-      setCurrentPlaylistTitle('');
-      setActiveSearchKeyword('');
-      setSearchPage(1);
-      setSearchHasMore(false);
-      return;
-    }
-
-    const rankingMatch = pathname.match(/^\/music\/rankings\/([^/]+)\/([^/]+)$/);
-    if (rankingMatch) {
-      const source = normalizeSource(decodeURIComponent(rankingMatch[1]));
-      const playlistId = decodeURIComponent(rankingMatch[2]);
-      const playlistName = searchParams.get('name') || currentPlaylistTitle || '排行榜';
-      setCurrentSource(source);
-      void loadPlaylist(playlistId, playlistName, source, false);
-      return;
-    }
-
-    if (pathname === '/music/search') {
-      const keyword = searchParams.get('q') || '';
-      setCurrentView('search');
-      setCurrentPlaylistTitle(keyword ? `搜索: ${keyword}` : '搜索');
-      setSearchKeyword(keyword);
-      setSongs([]);
-      setActiveSearchKeyword('');
-      setSearchPage(1);
-      setSearchHasMore(false);
-      return;
-    }
-
-    if (pathname === '/music/my-playlists') {
-      setCurrentView('myPlaylists');
-      return;
-    }
-  }, [pathname, searchParams]);
 
   // 音频事件监听
   useEffect(() => {
@@ -2008,14 +1270,10 @@ export default function MusicClient({ children: _children }: { children?: React.
         audio.currentTime = 0;
         audio.play();
       } else if (playMode === 'random') {
-        // 优先从播放列表中随机选择
         if (playlist.length > 0) {
           const randomIndex = Math.floor(Math.random() * playlist.length);
           setPlaylistIndex(randomIndex);
           playSong(playlist[randomIndex], -1);
-        } else if (songs.length > 0) {
-          const randomIndex = Math.floor(Math.random() * songs.length);
-          playSong(songs[randomIndex], randomIndex);
         }
       } else {
         playNext();
@@ -2049,19 +1307,7 @@ export default function MusicClient({ children: _children }: { children?: React.
       audio.removeEventListener('durationchange', handleDurationChange);
       audio.removeEventListener('ended', handleEnded);
     };
-  }, [playMode, songs, currentSongIndex, lyrics, currentSong, playlistIndex, playRecords, quality]);
-
-  // 初始加载
-  useEffect(() => {
-    loadPlaylists(currentSource);
-  }, [currentSource]);
-
-  // 当切换到我的歌单视图时加载歌单列表
-  useEffect(() => {
-    if (currentView === 'myPlaylists') {
-      loadUserPlaylists();
-    }
-  }, [currentView]);
+  }, [playMode, currentSongIndex, lyrics, currentSong, playlistIndex, playRecords, quality]);
 
   // 歌词自动滚动
   useEffect(() => {
@@ -2076,34 +1322,6 @@ export default function MusicClient({ children: _children }: { children?: React.
       }
     }
   }, [currentLyricIndex]);
-
-  // 搜索框回车
-  const handleSearchKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      searchSongs();
-    }
-  };
-
-  useEffect(() => {
-    const sentinel = searchLoadMoreRef.current;
-    if (!sentinel || !activeSearchKeyword || !searchHasMore) return;
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) {
-          loadMoreSearchSongs();
-        }
-      },
-      {
-        root: null,
-        rootMargin: '240px 0px 240px 0px',
-        threshold: 0,
-      }
-    );
-
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [activeSearchKeyword, searchHasMore, loadingMoreSearch, searchPage]);
 
   // 进度条拖动
   const handleProgressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2229,13 +1447,7 @@ export default function MusicClient({ children: _children }: { children?: React.
   };
 
   const getSourceLabel = () => {
-    switch (currentSource) {
-      case 'wy': return '网易云';
-      case 'tx': return 'QQ音乐';
-      case 'kw': return '酷我';
-      case 'kg': return '酷狗';
-      case 'mg': return '咪咕';
-    }
+    return getSourceDisplayLabel(currentSource, false);
   };
 
   const formatTime = (seconds: number) => {
@@ -2377,9 +1589,6 @@ export default function MusicClient({ children: _children }: { children?: React.
     const handlePlayAllEvent = (event: Event) => {
       const detail = (event as CustomEvent<{ songs: Song[]; title?: string }>).detail;
       if (!detail?.songs?.length) return;
-      setSongs(detail.songs);
-      setCurrentPlaylistTitle(detail.title || '当前列表');
-      setActiveSearchKeyword('');
       void handlePlayAllCurrentSongsWith(detail.songs, detail.title || '当前列表');
     };
 
@@ -2407,7 +1616,7 @@ export default function MusicClient({ children: _children }: { children?: React.
       window.removeEventListener('music:add-to-playlist', handleAddToPlaylistEvent);
       window.removeEventListener('music:play-later', handlePlayLaterEvent);
     };
-  }, [songs, playlist, playRecords, currentSong, quality, currentSource]);
+  }, [playlist, playRecords, currentSong, quality, currentSource]);
 
   return (
     <div className="music-theme min-h-screen bg-zinc-950 text-white">
@@ -2702,7 +1911,7 @@ export default function MusicClient({ children: _children }: { children?: React.
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-center gap-1.5">
                     <div className="min-w-0 truncate text-sm font-bold text-white">{currentSong.name}</div>
-                    <SourcePill source={currentSong.platform} className="hidden sm:inline-flex" />
+                    <SourcePill source={currentSong.platform} variant="accent" className="hidden sm:inline-flex" />
                   </div>
                   <div className="text-xs text-zinc-500 truncate">{currentSong.artist}</div>
                 </div>
@@ -2871,7 +2080,7 @@ export default function MusicClient({ children: _children }: { children?: React.
                   </div>
                   <div className="mb-1 flex min-w-0 items-center justify-center gap-1.5">
                     <h2 className="min-w-0 truncate text-center text-base md:text-xl lg:text-2xl font-bold text-white">{currentSong.name}</h2>
-                    <SourcePill source={currentSong.platform} />
+                    <SourcePill source={currentSong.platform} variant="accent" />
                   </div>
                   <p className="text-xs md:text-sm lg:text-base text-zinc-400 line-clamp-1 text-center">{currentSong.artist}</p>
                 </div>
@@ -3234,7 +2443,7 @@ export default function MusicClient({ children: _children }: { children?: React.
                             }`}>
                               {song.name}
                             </div>
-                            <SourcePill source={song.platform} />
+                            <SourcePill source={song.platform} variant="accent" />
                           </div>
                           <div className="text-xs text-zinc-500 truncate">{song.artist}</div>
                         </div>
@@ -3422,95 +2631,13 @@ export default function MusicClient({ children: _children }: { children?: React.
       )}
 
 
-      {showSidebarDrawer && (
-        <div className="fixed inset-0 z-[95]">
-          <button
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300"
-            onClick={() => setShowSidebarDrawer(false)}
-            aria-label="关闭菜单"
-          />
-          <aside className="absolute left-0 top-0 flex h-full w-72 max-w-[85vw] flex-col border-r border-white/10 bg-zinc-950/80 backdrop-blur-xl px-5 py-6 shadow-[20px_0_40px_rgba(0,0,0,0.5)] animate-in slide-in-from-left duration-300 ease-out">
-            <div className="mb-8 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-green-400 to-emerald-600 text-white shadow-lg shadow-green-500/20">
-                  <svg className="h-5 w-5" fill="currentColor" viewBox="0 0 20 20">
-                    <path d="M18 3a1 1 0 00-1.196-.98l-10 2A1 1 0 006 5v9.114A4.369 4.369 0 005 14c-1.657 0-3 .895-3 2s1.343 2 3 2 3-.895 3-2V7.82l8-1.6v5.894A4.37 4.37 0 0015 12c-1.657 0-3 .895-3 2s1.343 2 3 2 3-.895 3-2V3z" />
-                  </svg>
-                </div>
-                <div>
-                  <div className="text-lg font-bold text-white tracking-wide">音乐菜单</div>
-                  <div className="text-[10px] uppercase tracking-wider text-green-400/80">Music Navigation</div>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowSidebarDrawer(false)}
-                className="flex h-9 w-9 items-center justify-center rounded-full bg-white/5 text-zinc-400 transition-all hover:bg-white/10 hover:text-white hover:rotate-90"
-              >
-                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-
-            <nav className="space-y-3 relative z-10">
-              {[
-                { key: 'rankings', label: '排行榜', href: '/music/rankings', icon: 'M3 4h18M8 8h13M3 12h18M8 16h13M3 20h18' },
-                { key: 'search', label: '搜索', href: `/music/search?source=${currentSource}`, icon: 'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z' },
-                { key: 'my-playlists', label: '我的歌单', href: '/music/my-playlists', icon: 'M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z' },
-              ].map((item) => {
-                const active = item.key === 'rankings'
-                  ? pathname?.startsWith('/music/rankings') || pathname === '/music'
-                  : pathname?.startsWith(`/music/${item.key}`);
-                return (
-                  <button
-                    key={item.key}
-                    onClick={() => {
-                      setShowSidebarDrawer(false);
-                      router.push(item.href);
-                    }}
-                    className={`group flex w-full items-center gap-4 rounded-2xl px-4 py-3.5 text-left transition-all duration-300 ${
-                      active
-                        ? 'bg-gradient-to-r from-green-500/20 to-emerald-500/5 text-white shadow-inner border border-green-500/20'
-                        : 'bg-transparent text-zinc-400 hover:bg-white/5 hover:text-white border border-transparent'
-                    }`}
-                  >
-                    <div className={`flex items-center justify-center transition-colors ${active ? 'text-green-400' : 'text-zinc-500 group-hover:text-white'}`}>
-                      <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d={item.icon} />
-                      </svg>
-                    </div>
-                    <span className="text-sm font-semibold">{item.label}</span>
-                    {active && (
-                      <div className="ml-auto w-1.5 h-1.5 rounded-full bg-green-400 shadow-[0_0_8px_rgba(74,222,128,0.8)] animate-pulse" />
-                    )}
-                  </button>
-                );
-              })}
-            </nav>
-
-            <div className="mt-auto relative z-10 pt-6">
-              <div className="absolute top-0 inset-x-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
-              <button
-                onClick={() => {
-                  setShowSidebarDrawer(false);
-                  router.push('/');
-                }}
-                className="group flex w-full items-center gap-4 rounded-2xl border border-white/5 bg-white/5 px-4 py-3.5 text-left text-zinc-400 transition-all duration-300 hover:bg-white/10 hover:text-white hover:border-white/10 hover:shadow-lg"
-              >
-                <div className="flex items-center justify-center text-zinc-500 group-hover:text-white transition-colors">
-                  <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                  </svg>
-                </div>
-                <span className="text-sm font-semibold">返回主页</span>
-              </button>
-            </div>
-            
-            {/* Ambient Background Effect */}
-            <div className="pointer-events-none absolute -left-20 -top-20 h-64 w-64 rounded-full bg-green-500/10 blur-[80px]" />
-          </aside>
-        </div>
-      )}
+      <MusicSidebarDrawer
+        currentSource={currentSource}
+        isOpen={showSidebarDrawer}
+        pathname={pathname}
+        onClose={() => setShowSidebarDrawer(false)}
+        onNavigate={(href) => router.push(href)}
+      />
 
       {/* Add to Playlist Modal */}
       <AddToPlaylistModal
@@ -3585,27 +2712,15 @@ export default function MusicClient({ children: _children }: { children?: React.
                 <div className="flex justify-end space-x-3">
                   <button
                     onClick={confirmModal.onCancel}
-                    disabled={deletingPlaylistId !== null}
-                    className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 disabled:bg-zinc-800 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
+                    className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg transition-colors"
                   >
                     取消
                   </button>
                   <button
                     onClick={confirmModal.onConfirm}
-                    disabled={deletingPlaylistId !== null}
-                    className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-zinc-700 disabled:cursor-not-allowed text-white rounded-lg transition-colors flex items-center gap-2"
+                    className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors flex items-center gap-2"
                   >
-                    {deletingPlaylistId !== null ? (
-                      <>
-                        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                        </svg>
-                        删除中...
-                      </>
-                    ) : (
-                      '确定'
-                    )}
+                    确定
                   </button>
                 </div>
               </div>
