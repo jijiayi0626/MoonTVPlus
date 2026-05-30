@@ -91,6 +91,10 @@ function scrollIntoScrollableParent(element: HTMLElement) {
   return true;
 }
 
+function isTopNavigationElement(element: HTMLElement) {
+  return Boolean(element.closest('header'));
+}
+
 function focusElement(element: HTMLElement) {
   element.focus({ preventScroll: true });
 
@@ -138,7 +142,7 @@ function moveSpatialFocus(direction: 'up' | 'down' | 'left' | 'right', lastFocus
   const cx = current.left + current.width / 2;
   const cy = current.top + current.height / 2;
 
-  let best: { element: HTMLElement; score: number } | null = null;
+  const candidates: Array<{ element: HTMLElement; score: number }> = [];
 
   for (const element of elements) {
     if (element === active) continue;
@@ -160,10 +164,21 @@ function moveSpatialFocus(direction: 'up' | 'down' | 'left' | 'right', lastFocus
     const secondary = direction === 'left' || direction === 'right' ? Math.abs(dy) : Math.abs(dx);
     const score = primary + secondary * 2.4;
 
-    if (!best || score < best.score) {
-      best = { element, score };
+    candidates.push({ element, score });
+  }
+
+  let eligibleCandidates = candidates;
+  if (direction === 'up' && !isTopNavigationElement(active)) {
+    const contentCandidates = candidates.filter(({ element }) => !isTopNavigationElement(element));
+    if (contentCandidates.length > 0) {
+      eligibleCandidates = contentCandidates;
     }
   }
+
+  const best = eligibleCandidates.reduce<{ element: HTMLElement; score: number } | null>(
+    (currentBest, candidate) => (!currentBest || candidate.score < currentBest.score ? candidate : currentBest),
+    null
+  );
 
   if (best) focusElement(best.element);
 }
