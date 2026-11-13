@@ -13,9 +13,15 @@ binding = "ASSETS"
 # D1 数据库绑定
 [[d1_databases]]
 binding = "DB"
-database_name = "moontvplus"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_name = "moontv-plus"
+database_id = "0e782920-adb3-4c47-a312-278a3afc0547"
+
+# 自定义域名路由
+[[routes]]
+pattern = "tv.inumc.dpdns.org/*"
+zone_name = "inumc.dpdns.org"
 
 [vars]
 NODE_ENV = "production"
 BUILD_TARGET = "cloudflare"
+NEXT_PUBLIC_STORAGE_TYPE = "d1"
