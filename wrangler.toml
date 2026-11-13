@@ -34,10 +34,8 @@ new_sqlite_classes = ["WatchRoomHub"]
 
 # 定时任务（对齐 vercel.json 的 "0 1 * * *"）。
 # 触发器要想生效，入口必须导出 scheduled —— 见 cloudflare-worker.ts。
-# 注意：当前账号 Workers Free 的 5 个 cron 名额已满（code 10072），
-# 部署时会报触发器仅部分更新；解除下面注释并在升级 Paid 或释放名额后重新部署即可。
-# [triggers]
-# crons = ["0 1 * * *"]
+[triggers]
+crons = ["0 1 * * *"]
 
 # 注意：[vars] 必须留在文件最后。
 # cloudflare-deploy.yml 是用 `echo >> wrangler.toml` 追加环境变量的，
