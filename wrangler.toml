@@ -44,5 +44,8 @@ crons = ["0 1 * * *"]
 NODE_ENV = "production"
 BUILD_TARGET = "cloudflare"
 NEXT_PUBLIC_STORAGE_TYPE = "d1"
+# 观影室：Cloudflare 上用内置 Durable Object（WATCH_ROOM），无需外部服务器
+WATCH_ROOM_ENABLED = "true"
+WATCH_ROOM_SERVER_TYPE = "internal"
 # cron 路由等任务真正结束再返回（CF 上不需要 Vercel 那套"先返回 202 再后台跑"）
 CRON_WAIT_FOR_COMPLETION = "true"
